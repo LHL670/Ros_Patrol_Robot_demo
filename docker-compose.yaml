@@ -1,0 +1,26 @@
+services:
+  patrol-robot:
+    build: .
+    image: ros2-patrol-robot
+    container_name: patrol_bot_container
+    # 使用 Host 網路模式，方便 ROS 2 通訊
+    network_mode: host
+    
+    # GUI 顯示設定 (將畫面轉送回本機)
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - NVIDIA_VISIBLE_DEVICES=all # 若有 NVIDIA 顯卡支援
+      - NVIDIA_DRIVER_CAPABILITIES=all
+    
+    # 掛載 Volumes
+    volumes:
+      # 掛載 X11 Socket 讓 GUI 可顯示
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # 將當前程式碼掛載進去，方便你修改程式碼後不用重新 Build 就能生效
+      - ./turtlesim_patrol.py:/root/workspace/turtlesim_patrol.py
+    
+    # 權限設定 (避免 GUI 權限問題)
+    privileged: true
+    stdin_open: true
+    tty: true
