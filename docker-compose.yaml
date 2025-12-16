@@ -19,6 +19,8 @@ services:
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       # 將當前程式碼掛載進去，方便你修改程式碼後不用重新 Build 就能生效
       - ./turtlesim_patrol.py:/root/workspace/turtlesim_patrol.py
+      - ./turtlesim_chase.py:/root/workspace/turtlesim_chase.py
+      - ./turtlesim_chase_fov.py:/root/workspace/turtlesim_chase_fov.py
     
     # 權限設定 (避免 GUI 權限問題)
     privileged: true
