@@ -2,57 +2,59 @@
 
 ## 1. 專案概述 (Overview)
 
-本專案是一個基於 **ROS 2 Humble** 的教學與實作範例，旨在展示如何將「AI 感知邏輯」結合到「機器人控制系統」中。
+本專案是一個進階的 **ROS 2 Humble** 多機器人互動範例，模擬了一場具備 AI 策略的「警匪追逐戰」。
 
-雖然使用 **Turtlesim** 作為輕量級模擬器，但核心程式碼架構 (`turtlesim_patrol.py`) 採用了與真實機器人完全相同的開發邏輯：**「感知 (Perception) -> 決策 (Decision) -> 控制 (Action)」** 的閉迴路系統。
+不再是單純的巡邏，本專案實作了 **Multi-Agent System (多代理系統)**。巡邏者與入侵者各自擁有獨立的決策邏輯，包含預判攔截、據點導航、恐慌逃跑模式，以及基於 **PPO (Proximal Policy Optimization)** 架構的避障推論。
 
-### 核心功能
+### 角色
 
-* **自主巡邏 (Autonomous Patrol)**: 機器人在限定範圍內直線移動，遇牆自動轉向。
-* **模擬 AI 感知 (Mock AI Perception)**: 程式內部模擬電腦視覺模型（如 YOLO），隨機觸發「偵測到入侵者」事件。
-* **追蹤與警報 (Tracking & Alert)**: 當發現目標時，機器人會中斷巡邏，自動轉向鎖定目標並發出警報。
-* **容器化環境 (Dockerized)**: 透過 Docker 封裝 ROS 2 環境，解決相依性問題並支援 GUI 顯示。
+* **巡邏者 (Police)**:
+  * **據點巡邏**: 在搜索模式下，依序前往隨機生成的巡邏點，不再盲目亂轉。
+  * **預判攔截**: 追捕時會計算入侵者速度向量，直接前往「未來位置」進行攔截。
+  * **視覺化**: 搜索時軌跡為**綠色**，發現目標後變為**青色**。
+
+* **入侵者 (Intruder)**:
+  * **PPO 架構**: 採用強化學習的推論架構，結合勢場法 (Potential Fields) 進行決策。
+  * **據點逃脫**: 生成後會獲得隨機逃跑路線 (Waypoints)，試圖依序闖關。
+  * **恐慌模式 (Panic Mode)**: 當巡邏者靠近 (< 3.5m) 時，強制切斷導航，啟動**黃色警報**，全力反向逃跑與牆角彈射。
+  * **智慧生成**: 確保生成位置遠離巡邏者，杜絕「落地成盒」。
+
+* 利用動態軌跡顏色 (Trail Color) 即時反映角色狀態。
 
 ---
 
-## 2. 程式架構 (System Architecture)
+## 2. 系統架構 (System Architecture)
 
 ### 2.1 檔案結構
 
 ```text
 ros2_patrol_project/
-├── docker-compose.yaml      # 容器啟動設定 (包含 GUI 顯示掛載、Volume 對映)
-├── Dockerfile               # 環境建置檔 (基於 osrf/ros:humble-desktop)
-├── requirements.txt         # Python 依賴清單 (NumPy, OpenCV, YOLO 等)
-├── turtlesim_patrol.py      # [核心] 巡邏機器人控制節點
+├── docker-compose.yaml      # 容器啟動設定 (包含 GUI 顯示掛載)
+├── Dockerfile               # 環境建置檔 (ROS 2 Humble + Python 依賴)
+├── requirements.txt         # Python 依賴清單 (NumPy 等)
+├── turtlesim_chase.py       # 警匪追逐主程式 
 └── README.md                # 專案說明文件
 ```
 
-### 2.2 邏輯控制流程 (State Machine)
+### 2.2 角色狀態機 (State Machines)
 
-本系統採用有限狀態機 (Finite State Machine) 進行行為管理：
+系統同時運行兩套狀態邏輯：
 
-1. **PATROL (巡邏模式)**
-   * **行為**: 以固定速度前進 (`linear.x > 0`)。
-   * **條件**: 若邊界檢查觸發 -> 轉彎；若 AI 偵測到目標 -> 切換至 TRACKING。
+| 角色 | 狀態 (State) | 行為描述 | 視覺回饋 |
+| :--- | :--- | :--- | :--- |
+| **Police** | **SEARCH** | 沿著隨機生成的巡邏點 (Waypoints) 移動搜索。 | 🟢 綠色軌跡 |
+| | **CHASING** | 發現入侵者 (FOV內)，加速並預判攔截。 | 🔵 青色軌跡 |
+| | **ARRESTED** | 距離 < 0.8m，逮捕成功，凍結現場。 | 🛑 停止 |
+| **Intruder** | **NAVIGATE** | 安全狀態，依序前往隨機逃跑據點。 | 🔴 紅色軌跡 |
+| | **PANIC** | 危險狀態 (< 3.5m)，忽視據點，全力避障與反向逃跑。 | 🟡 黃色粗軌跡 |
 
-2. **TRACKING (鎖定模式)**
-   * **行為**: 停止前進 (`linear.x = 0`)，原地旋轉 (`angular.z`) 直到面向目標角度。
-   * **條件**: 鎖定計時結束 (例如 5秒後) -> 切換回 PATROL。
+### 2.3 演算法邏輯
 
-### 2.3 資料流 (Data Flow)
-
-```mermaid
-graph LR
-    A[Turtlesim Node] -- /turtle1/pose --> B(AI Patrol Node)
-    B -- 模擬 AI 運算 --> C{決策邏輯}
-    C -- /turtle1/cmd_vel --> A
-    C -- Log/Warn --> D[監控終端機]
-```
-
-* **Input**: `/turtle1/pose` (獲取自身位置)
-* **Process**: `mock_ai_perception()` (模擬視覺辨識)
-* **Output**: `/turtle1/cmd_vel` (速度控制指令)
+* **視線模擬 (FOV)**: 巡邏者僅能看見前方 90 度扇形、距離 5 公尺內的目標。
+* **角落彈射 (Corner Ejection)**: 當入侵者被逼入死角時，產生強力向心向量，強制脫困。
+* **PPO 獎勵函數 (Reward Function)**:
+    * $R = R_{survival} + R_{distance} - P_{wall} - P_{corner} - P_{caught}$
+    * 即時計算並顯示於終端機，評估逃跑決策品質。
 
 ---
 
@@ -60,22 +62,18 @@ graph LR
 
 * **作業系統**: Linux (Ubuntu 建議) 或 Windows (WSL2)。
 * **軟體**:
-  * Docker Engine
-  * Docker Compose
-  * X11 Server (Linux 內建; Windows WSL2 需確認 GUI 支援或安裝 VcXsrv)。
+    * Docker Engine & Docker Compose
+    * X11 Server (用於顯示 Turtlesim GUI)。
 
 ---
 
 ## 4. 執行步驟 (Execution Steps)
 
-### 步驟 1：建立專案與下載檔案
-
-建立一個資料夾，將 `Dockerfile`, `docker-compose.yaml`, `requirements.txt`, `turtlesim_patrol.py` 放入其中。
+### 步驟 1：建立專案
+確保資料夾內包含 `Dockerfile`, `docker-compose.yaml`, `turtlesim_chase.py` (v16) 與此 `README.md`。
 
 ### 步驟 2：開放 GUI 顯示權限
-
-為了讓 Docker 內的視窗能顯示在您的螢幕上，請在本機終端機執行：
-
+在本機終端機執行：
 ```bash
 xhost +local:root
 ```
@@ -103,8 +101,6 @@ docker exec -it patrol_bot_container bash
 ros2 run turtlesim turtlesim_node
 ```
 
-*此時您應該會看到藍色的海龜視窗。*
-
 ### 步驟 5：啟動巡邏程式 (Terminal 2)
 
 開啟**另一個**新的終端機，進入同一個容器執行控制程式：
@@ -114,15 +110,30 @@ ros2 run turtlesim turtlesim_node
 docker exec -it patrol_bot_container bash
 
 # 執行巡邏機器人
-python3 turtlesim_patrol.py
+python3 turtlesim_chase_fov.py
 ```
 
-### 預期結果
+### 預期體驗
 
-1. **Terminal 2** 會顯示 `[INFO]: Turtlesim AI 巡邏機器人已啟動！`。
-2. 海龜開始移動。
-3. 當 AI (模擬) 偵測到入侵者時，海龜會停下並轉向，Terminal 會顯示黃色警報：
-   `[WARN] ... !!! 警告：偵測到入侵者 !!!`
+1. **回合開始**: 入侵者 (Intruder) 在遠處生成，開始跑向它的第一個據點 (紅色軌跡)。
+
+2. **巡邏**: 巡邏者 (Turtle1) 沿著綠色軌跡巡邏。
+
+3. **發現**: 當入侵者進入巡邏者視野，巡邏者軌跡變藍，加速追捕。
+
+4. **恐慌**: 當兩者靠近，入侵者軌跡變**黃色 (粗線)**，開始瘋狂逃竄。
+
+5. **逮捕**: 追捕成功後，顯示結算獎勵，3秒後重置場景，生成新的隨機據點與路線。
+
+## 5. 參數調整 (Tuning)
+
+可以在 `turtlesim_chase_fov.py` 的 `__init__` 區塊調整遊戲難度：
+
+* `self.max_speed`: 巡邏者最大速度 (預設 3.5)。
+
+* `self.intruder_speed`: 入侵者速度 (預設 2.5)。
+
+* `self.fov_range`: 巡邏者視線距離 (預設 5.0)。
 
 ---
 <!-- 
